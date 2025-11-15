@@ -2,13 +2,18 @@
 
 This example demonstrates how to protect a FastMCP server with Azure/Microsoft OAuth.
 
-Required environment variables:
+Required environment variables (for confidential clients):
 - AZURE_CLIENT_ID: Your Azure application (client) ID
 - AZURE_CLIENT_SECRET: Your Azure client secret
 - AZURE_TENANT_ID: Tenant ID
   Options: "organizations" (work/school), "consumers" (personal), or specific tenant ID
 - AZURE_REQUIRED_SCOPES: At least one scope required (e.g., "read" or "read,write")
   These must match scope names created under "Expose an API" in your Azure App registration
+
+For public clients (mobile/SPA apps):
+- Set FASTMCP_SERVER_AUTH_AZURE_TOKEN_ENDPOINT_AUTH_METHOD=none
+- Do NOT set AZURE_CLIENT_SECRET
+- Configure "Allow public client flows" in Azure Portal Authentication settings
 
 To run:
     python server.py
@@ -29,6 +34,8 @@ auth = AzureProvider(
     # required_scopes is automatically loaded from FASTMCP_SERVER_AUTH_AZURE_REQUIRED_SCOPES
     # At least one scope is required - use unprefixed scope names from your Azure App (e.g., ["read", "write"])
     # redirect_path="/auth/callback",  # Default path - change if using a different callback URL
+    # For public clients, uncomment the line below and remove client_secret:
+    # token_endpoint_auth_method="none",
 )
 
 mcp = FastMCP("Azure OAuth Example Server", auth=auth)
