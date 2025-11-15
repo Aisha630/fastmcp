@@ -487,3 +487,85 @@ class TestAzureProvider:
         parsed = urlparse(provider._upstream_authorization_endpoint)
         assert parsed.netloc == "login.microsoftonline.us"
         assert "/organizations/" in parsed.path
+
+    def test_public_client_with_token_endpoint_auth_method_none(self):
+        """Test that public clients can be created with token_endpoint_auth_method='none' and no client_secret."""
+        provider = AzureProvider(
+            client_id="test_client",
+            tenant_id="test-tenant",
+            required_scopes=["read"],
+            token_endpoint_auth_method="none",
+            jwt_signing_key="test-secret",
+        )
+
+        assert provider._upstream_client_id == "test_client"
+        assert provider._upstream_client_secret.get_secret_value() == ""
+        assert provider._token_endpoint_auth_method == "none"
+
+    def test_public_client_missing_client_secret_with_auth_method_none_succeeds(self):
+        """Test that client_secret is not required when token_endpoint_auth_method is 'none'."""
+        # This should not raise an error
+        provider = AzureProvider(
+            client_id="test_client",
+            tenant_id="test-tenant",
+            required_scopes=["read"],
+            token_endpoint_auth_method="none",
+            jwt_signing_key="test-secret",
+        )
+
+        assert provider is not None
+        assert provider._token_endpoint_auth_method == "none"
+
+    def test_confidential_client_missing_client_secret_raises_error(self):
+        """Test that client_secret is required for confidential clients (when auth_method is not 'none')."""
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(
+                ValueError,
+                match="client_secret is required for confidential clients",
+            ):
+                AzureProvider(
+                    client_id="test_client",
+                    tenant_id="test-tenant",
+                    required_scopes=["read"],
+                    # No token_endpoint_auth_method specified, so client_secret is required
+                )
+
+    def test_public_client_with_token_endpoint_auth_method_from_env(self):
+        """Test that token_endpoint_auth_method can be set via environment variable."""
+        with patch.dict(
+            os.environ,
+            {
+                "FASTMCP_SERVER_AUTH_AZURE_CLIENT_ID": "env-client-id",
+                "FASTMCP_SERVER_AUTH_AZURE_TENANT_ID": "env-tenant-id",
+                "FASTMCP_SERVER_AUTH_AZURE_REQUIRED_SCOPES": "read",
+                "FASTMCP_SERVER_AUTH_AZURE_TOKEN_ENDPOINT_AUTH_METHOD": "none",
+                "FASTMCP_SERVER_AUTH_AZURE_JWT_SIGNING_KEY": "test-secret",
+            },
+        ):
+            provider = AzureProvider()
+
+            assert provider._upstream_client_id == "env-client-id"
+            assert provider._token_endpoint_auth_method == "none"
+            assert provider._upstream_client_secret.get_secret_value() == ""
+
+    def test_public_client_oauth_endpoints_configured_correctly(self):
+        """Test that public client OAuth endpoints are configured correctly."""
+        provider = AzureProvider(
+            client_id="test_client",
+            tenant_id="my-tenant-id",
+            required_scopes=["read"],
+            token_endpoint_auth_method="none",
+            base_url="https://myserver.com",
+            jwt_signing_key="test_secret",
+        )
+
+        # Check that endpoints use the correct Azure OAuth2 v2.0 endpoints with tenant
+        assert (
+            provider._upstream_authorization_endpoint
+            == "https://login.microsoftonline.com/my-tenant-id/oauth2/v2.0/authorize"
+        )
+        assert (
+            provider._upstream_token_endpoint
+            == "https://login.microsoftonline.com/my-tenant-id/oauth2/v2.0/token"
+        )
+        assert provider._token_endpoint_auth_method == "none"

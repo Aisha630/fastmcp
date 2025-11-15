@@ -47,6 +47,7 @@ class AzureProviderSettings(BaseSettings):
     allowed_client_redirect_uris: list[str] | None = None
     jwt_signing_key: str | None = None
     base_authority: str = "login.microsoftonline.com"
+    token_endpoint_auth_method: str | None = None
 
     @field_validator("required_scopes", mode="before")
     @classmethod
@@ -79,8 +80,9 @@ class AzureProvider(OAuthProxy):
     - JWT validation using tenant issuer and JWKS
     - Supports tenant configurations: specific tenant ID, "organizations", or "consumers"
     - Custom API scopes and Microsoft Graph scopes in a single provider
+    - Supports both confidential clients (with client_secret) and public clients
 
-    Setup:
+    Setup for Confidential Clients:
     1. Create an App registration in Azure Portal
     2. Configure Web platform redirect URI: http://localhost:8000/auth/callback (or your custom path)
     3. Add an Application ID URI under "Expose an API" (defaults to api://{client_id})
@@ -89,12 +91,18 @@ class AzureProvider(OAuthProxy):
     6. Create a client secret
     7. Get Application (client) ID, Directory (tenant) ID, and client secret
 
+    Setup for Public Clients:
+    1-5. Same as confidential clients
+    6. In Azure Portal, go to Authentication → Advanced settings → Allow public client flows: Yes
+    7. Do NOT create a client secret
+    8. Use token_endpoint_auth_method="none" in the provider configuration
+
     Example:
         ```python
         from fastmcp import FastMCP
         from fastmcp.server.auth.providers.azure import AzureProvider
 
-        # Standard Azure (Public Cloud)
+        # Confidential Client (with client_secret)
         auth = AzureProvider(
             client_id="your-client-id",
             client_secret="your-client-secret",
@@ -103,6 +111,15 @@ class AzureProvider(OAuthProxy):
             additional_authorize_scopes=["User.Read", "Mail.Read"],  # Optional Graph scopes
             base_url="http://localhost:8000",
             # identifier_uri defaults to api://{client_id}
+        )
+
+        # Public Client (no client_secret)
+        auth_public = AzureProvider(
+            client_id="your-client-id",
+            tenant_id="your-tenant-id",
+            required_scopes=["read", "write"],
+            token_endpoint_auth_method="none",  # Required for public clients
+            base_url="http://localhost:8000",
         )
 
         # Azure Government
@@ -123,7 +140,7 @@ class AzureProvider(OAuthProxy):
         self,
         *,
         client_id: str | NotSetT = NotSet,
-        client_secret: str | NotSetT = NotSet,
+        client_secret: str | NotSetT | None = NotSet,
         tenant_id: str | NotSetT = NotSet,
         identifier_uri: str | NotSetT | None = NotSet,
         base_url: str | NotSetT = NotSet,
@@ -136,12 +153,14 @@ class AzureProvider(OAuthProxy):
         jwt_signing_key: str | bytes | NotSetT = NotSet,
         require_authorization_consent: bool = True,
         base_authority: str | NotSetT = NotSet,
+        token_endpoint_auth_method: str | NotSetT | None = NotSet,
     ) -> None:
         """Initialize Azure OAuth provider.
 
         Args:
             client_id: Azure application (client) ID from your App registration
-            client_secret: Azure client secret from your App registration
+            client_secret: Azure client secret from your App registration. Optional for public clients
+                when token_endpoint_auth_method="none" is specified.
             tenant_id: Azure tenant ID (specific tenant GUID, "organizations", or "consumers")
             identifier_uri: Optional Application ID URI for your custom API (defaults to api://{client_id}).
                 This URI is automatically prefixed to all required_scopes during initialization.
@@ -179,6 +198,11 @@ class AzureProvider(OAuthProxy):
                 When True, users see a consent screen before being redirected to Azure.
                 When False, authorization proceeds directly without user confirmation.
                 SECURITY WARNING: Only disable for local development or testing environments.
+            token_endpoint_auth_method: Token endpoint authentication method for Azure.
+                Common values: "client_secret_post", "client_secret_basic", "none".
+                - Use "none" for public clients (mobile/SPA apps) where client_secret should not be sent
+                - Use "client_secret_post" or "client_secret_basic" for confidential clients
+                - If None (default), authlib will use "client_secret_basic" when client_secret is provided
         """
         settings = AzureProviderSettings.model_validate(
             {
@@ -196,6 +220,7 @@ class AzureProvider(OAuthProxy):
                     "allowed_client_redirect_uris": allowed_client_redirect_uris,
                     "jwt_signing_key": jwt_signing_key,
                     "base_authority": base_authority,
+                    "token_endpoint_auth_method": token_endpoint_auth_method,
                 }.items()
                 if v is not NotSet
             }
@@ -205,8 +230,13 @@ class AzureProvider(OAuthProxy):
         if not settings.client_id:
             msg = "client_id is required - set via parameter or FASTMCP_SERVER_AUTH_AZURE_CLIENT_ID"
             raise ValueError(msg)
-        if not settings.client_secret:
-            msg = "client_secret is required - set via parameter or FASTMCP_SERVER_AUTH_AZURE_CLIENT_SECRET"
+        
+        # client_secret is optional for public clients (when token_endpoint_auth_method="none")
+        if not settings.client_secret and settings.token_endpoint_auth_method != "none":
+            msg = (
+                "client_secret is required for confidential clients - set via parameter or "
+                "FASTMCP_SERVER_AUTH_AZURE_CLIENT_SECRET. For public clients, use token_endpoint_auth_method='none'"
+            )
             raise ValueError(msg)
 
         # Validate tenant_id is provided
@@ -277,6 +307,7 @@ class AzureProvider(OAuthProxy):
             client_storage=client_storage,
             jwt_signing_key=settings.jwt_signing_key,
             require_authorization_consent=require_authorization_consent,
+            token_endpoint_auth_method=settings.token_endpoint_auth_method,
         )
 
         authority_info = ""
